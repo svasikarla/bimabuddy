@@ -48,6 +48,9 @@ export function Header() {
           <Link href="#faq" className="text-sm font-medium transition-colors hover:text-primary">
             FAQ
           </Link>
+          <Link href="/admin" className="text-sm font-medium transition-colors hover:text-primary">
+            Admin
+          </Link>
         </nav>
 
         <div className="flex items-center gap-4">
@@ -101,6 +104,13 @@ export function Header() {
                   onClick={() => setIsOpen(false)}
                 >
                   FAQ
+                </Link>
+                <Link
+                  href="/admin"
+                  className="text-sm font-medium transition-colors hover:text-primary"
+                  onClick={() => setIsOpen(false)}
+                >
+                  Admin
                 </Link>
               </nav>
             </SheetContent>
