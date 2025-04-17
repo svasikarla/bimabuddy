@@ -20,6 +20,7 @@ export function Chatbot() {
   const [isRecording, setIsRecording] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
   const [audioContext, setAudioContext] = useState<AudioContext | null>(null)
+  const [isSpeaking, setIsSpeaking] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const { language } = useLanguage()
 
@@ -45,15 +46,68 @@ export function Chatbot() {
       kannada: "ನಮಸ್ಕಾರ! ನಾನು ನಿಮ್ಮ ಆರೋಗ್ಯ ವಿಮೆ ಸಹಾಯಕ. ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಬಹುದು?",
       malayalam: "നമസ്കാരം! ഞാൻ നിങ്ങളുടെ ആരോഗ്യ ഇൻഷുറൻസ് സഹായി ആണ്. എനിക്ക് നിങ്ങളെ എങ്ങനെ സഹായിക്കാൻ കഴിയും?",
       punjabi: "ਸਤ ਸ੍ਰੀ ਅਕਾਲ! ਮੈਂ ਤੁਹਾਡਾ ਸਿਹਤ ਬੀਮਾ ਸਹਾਇਕ ਹਾਂ। ਮੈਂ ਤੁਹਾਡੀ ਕਿਵੇਂ ਮਦਦ ਕਰ ਸਕਦਾ ਹਾਂ?"
-    }
+    };
 
+    const greetingText = greetings[language] || greetings.english;
+    
+    // First set the text-only greeting
     setMessages([{
       id: "1",
-      text: greetings[language] || greetings.english,
+      text: greetingText,
       sender: "bot",
       timestamp: new Date(),
-    }])
-  }, [language])
+    }]);
+    
+    // Wait until audio context is initialized before trying to play audio
+    if (!audioContext) return;
+    
+    // Get the audio for the greeting using a simpler method
+    const getGreetingAudio = async () => {
+      try {
+        // First try to get the audio from the API
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            message: "greeting", 
+            language,
+            text: greetingText
+          }),
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          
+          if (data.audioUrl) {
+            // Update the message with the audio URL
+            setMessages([{
+              id: "1",
+              text: greetingText,
+              sender: "bot",
+              timestamp: new Date(),
+              audioUrl: data.audioUrl
+            }]);
+            
+            // Add a small delay before trying to play
+            setTimeout(() => {
+              // This is a more reliable way to play audio with better error handling
+              playAudio(data.audioUrl);
+            }, 500);
+          }
+        }
+      } catch (error) {
+        console.error("Error getting greeting audio:", error);
+        // Continue without audio if there's an error
+      }
+    };
+    
+    // Small delay to ensure everything is ready
+    const timer = setTimeout(() => {
+      getGreetingAudio();
+    }, 1000);
+    
+    return () => clearTimeout(timer);
+  }, [language, audioContext]);
 
   // Scroll to bottom of messages
   useEffect(() => {
@@ -62,20 +116,90 @@ export function Chatbot() {
 
   // Play audio from base64 data
   const playAudio = async (audioData: string) => {
-    if (!audioContext) return
+    if (!audioContext) {
+      console.error('AudioContext not initialized');
+      return;
+    }
 
     try {
-      const response = await fetch(audioData)
-      const arrayBuffer = await response.arrayBuffer()
-      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
-      const source = audioContext.createBufferSource()
-      source.buffer = audioBuffer
-      source.connect(audioContext.destination)
-      source.start(0)
+      setIsSpeaking(true);
+      console.log('Attempting to play audio');
+      
+      // Create a simple Audio element 
+      const audio = new Audio();
+      
+      // Add event listeners
+      audio.addEventListener('canplaythrough', () => {
+        console.log('Audio can play through, starting playback');
+        audio.play().catch(e => {
+          console.error('Error during audio play:', e);
+          setIsSpeaking(false);
+        });
+      });
+      
+      audio.addEventListener('ended', () => {
+        console.log('Audio playback completed');
+        setIsSpeaking(false);
+      });
+      
+      audio.addEventListener('error', (e) => {
+        console.error('Audio error event:', e);
+        setIsSpeaking(false);
+        // Try fallback if needed
+        fallbackPlayAudio(audioData);
+      });
+      
+      // Set source and load
+      audio.src = audioData;
+      
+      // Fallback timeout in case events don't fire
+      setTimeout(() => {
+        if (isSpeaking) {
+          console.log('Timeout reached, resetting speaking state');
+          setIsSpeaking(false);
+        }
+      }, 5000);
+      
     } catch (error) {
-      console.error('Error playing audio:', error)
+      console.error('Error in playAudio function:', error);
+      setIsSpeaking(false);
     }
-  }
+  };
+  
+  // Fallback method using AudioContext
+  const fallbackPlayAudio = async (audioData: string) => {
+    if (!audioContext) return;
+    
+    try {
+      const response = await fetch(audioData);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch audio: ${response.status} ${response.statusText}`);
+      }
+      
+      const arrayBuffer = await response.arrayBuffer();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      
+      const source = audioContext.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(audioContext.destination);
+      
+      source.onended = () => {
+        console.log('AudioContext playback ended');
+        setIsSpeaking(false);
+      };
+      
+      source.start(0);
+      console.log('AudioContext playback started');
+      
+      // Safety timeout to ensure isSpeaking is reset
+      setTimeout(() => {
+        setIsSpeaking(false);
+      }, 10000);
+    } catch (error) {
+      console.error('Fallback audio playback error:', error);
+      setIsSpeaking(false);
+    }
+  };
 
   // Handle sending a message
   const handleSendMessage = async () => {
@@ -93,39 +217,45 @@ export function Chatbot() {
     setIsProcessing(true)
 
     try {
-      // Get bot response in text
+      // Get bot response with audio from chat API
       const chatResponse = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: input, language }),
       })
 
+      if (!chatResponse.ok) {
+        throw new Error(`Chat API returned status ${chatResponse.status}`);
+      }
+
       const chatData = await chatResponse.json()
 
-      if (!chatData.text) throw new Error('No response from chat API')
+      // Handle error field returned by API
+      if (chatData.error) {
+        throw new Error(chatData.error);
+      }
 
-      // Get voice response from ElevenLabs
-      const voiceResponse = await fetch('/api/elevenlabs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: chatData.text, language }),
-      })
-
-      const voiceData = await voiceResponse.json()
+      // Check if text was returned (required field)
+      if (!chatData.text) {
+        throw new Error('No text response received from chat API');
+      }
 
       const botMessage: Message = {
         id: Date.now().toString(),
         text: chatData.text,
         sender: "bot",
         timestamp: new Date(),
-        audioUrl: voiceData.audioData,
+        audioUrl: chatData.audioUrl, // This might be null, which is fine
       }
 
       setMessages((prev) => [...prev, botMessage])
       
-      // Automatically play the audio response
-      if (voiceData.audioData) {
-        playAudio(voiceData.audioData)
+      // Automatically play the audio response if available
+      if (chatData.audioUrl) {
+        // Short delay before playing to allow UI to update
+        setTimeout(() => {
+          playAudio(chatData.audioUrl);
+        }, 300);
       }
     } catch (error) {
       console.error('Error processing message:', error)
@@ -200,13 +330,11 @@ export function Chatbot() {
               }`}
             >
               <p>{message.text}</p>
-              {message.audioUrl && message.sender === "bot" && (
-                <button
-                  onClick={() => playAudio(message.audioUrl!)}
-                  className="text-xs text-blue-500 hover:text-blue-700 mt-1"
-                >
-                  Play Voice Response
-                </button>
+              {message.sender === "bot" && message.audioUrl && message.id === messages[messages.length - 1]?.id && isSpeaking && (
+                <div className="flex items-center mt-1">
+                  <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse mr-2"></span>
+                  <span className="text-xs text-blue-500">Speaking...</span>
+                </div>
               )}
               <p className="text-xs opacity-70 mt-1">
                 {message.timestamp.toLocaleTimeString([], {
